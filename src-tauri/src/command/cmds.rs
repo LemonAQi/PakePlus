@@ -1,13 +1,17 @@
-use crate::command::model::find_port;
 use crate::command::model::ServerState;
 use base64::prelude::*;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::Serialize;
+use std::env;
+use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::Read;
 use std::io::Write;
+use std::net::TcpListener;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::WindowEvent;
@@ -430,27 +434,49 @@ pub async fn update_init_rs(
     return encoded_contents;
 }
 
-// #[tauri::command]
-// pub async fn download_file_by_binary(
-//     app: AppHandle,
-//     params: BinaryDownloadParams,
-// ) -> Result<(), String> {
-//     let window: Window = app.get_window("pake").unwrap();
-//     show_toast(&window, &get_download_message(MessageType::Start));
-//     let output_path = api::path::download_dir().unwrap().join(params.filename);
-//     let file_path = check_file_or_append(output_path.to_str().unwrap());
-//     let download_file_result = fs::write(file_path, &params.binary);
-//     match download_file_result {
-//         Ok(_) => {
-//             show_toast(&window, &get_download_message(MessageType::Success));
-//             Ok(())
-//         }
-//         Err(e) => {
-//             show_toast(&window, &get_download_message(MessageType::Failure));
-//             Err(e.to_string())
-//         }
-//     }
-// }
+#[tauri::command]
+pub async fn run_command(command: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let output = tokio::process::Command::new("powershell")
+        .arg("-Command")
+        .arg(&command)
+        .creation_flags(0x08000000)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        #[cfg(target_os = "windows")]
+        {
+            use encoding_rs::GBK;
+            let (decoded, _, _) = GBK.decode(&output.stdout);
+            Ok(decoded.into_owned())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        }
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            use encoding_rs::GBK;
+            let (decoded, _, _) = GBK.decode(&output.stderr);
+            Err(decoded.into_owned())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+}
 
 // following user
 #[tauri::command]
@@ -580,8 +606,6 @@ fn unzip_file(src_path: &str, dst_path: &str) -> std::io::Result<()> {
 
 #[tauri::command]
 pub async fn compress_folder(source: String, destination: String) -> Result<(), String> {
-    println!("source = {source}");
-    println!("destination = {destination}");
     zip_folder(&source, &destination).map_err(|e| e.to_string())
 }
 
@@ -656,4 +680,63 @@ pub fn notification(app: AppHandle, params: NotificationParams) -> Result<(), St
         .show()
         .unwrap();
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_exe_dir() -> String {
+    let exe_path = env::current_exe().unwrap();
+    let exe_dir = exe_path.parent().unwrap();
+    exe_dir.to_str().unwrap().to_string()
+}
+
+// load man.json
+pub fn load_man(base_dir: &str) -> Result<String, io::Error> {
+    let mut man_path = PathBuf::from(base_dir);
+    man_path.push("config");
+    man_path.push("man");
+    match fs::read_to_string(&man_path) {
+        Ok(man_base64) => match BASE64_STANDARD.decode(man_base64.trim()) {
+            Ok(decoded_bytes) => match String::from_utf8(decoded_bytes) {
+                Ok(decoded_str) => Ok(decoded_str),
+                Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+            },
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
+    }
+}
+
+// server config www dir
+#[tauri::command]
+pub fn get_www_dir(base_dir: &str) -> Result<String, io::Error> {
+    let mut www_dir = PathBuf::from(base_dir);
+    www_dir.push("config");
+    www_dir.push("www");
+    if fs::metadata(&www_dir).is_ok() {
+        let files = fs::read_dir(&www_dir)?;
+        if files.count() > 0 {
+            let port = find_port().unwrap();
+            let route = warp::fs::dir(www_dir);
+            tokio::spawn(async move {
+                warp::serve(route).run(([127, 0, 0, 1], port)).await;
+            });
+            return Ok(format!("http://127.0.0.1:{}", port));
+        } else {
+            return Ok(String::new());
+        }
+    }
+    Ok(String::new())
+}
+
+#[tauri::command]
+pub fn get_env_var(name: String) -> Result<String, String> {
+    std::env::var(name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn find_port() -> Result<u16, String> {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    Ok(port)
 }

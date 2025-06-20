@@ -370,6 +370,34 @@
                         />
                     </el-select>
                 </el-form-item>
+                <el-form-item
+                    v-if="store.currentProject.desktop.buildMethod === 'local'"
+                    label="保存路径"
+                >
+                    <el-input
+                        v-model.trim="savePath"
+                        autocomplete="off"
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck="false"
+                        placeholder="点击选择，默认保存到下载目录"
+                        @click="savePathHandle('select')"
+                    >
+                        <template #append>
+                            <el-tooltip
+                                class="box-item"
+                                :content="t('staticFile')"
+                                placement="bottom"
+                            >
+                                <el-button
+                                    class="distUpload"
+                                    :icon="FolderOpened"
+                                    @click="savePathHandle('open')"
+                                />
+                            </el-tooltip>
+                        </template>
+                    </el-input>
+                </el-form-item>
                 <!-- platform select -->
                 <el-form-item :label="t('pubPlatform')">
                     <el-tree-select
@@ -402,6 +430,7 @@
                     <el-input
                         v-model="store.currentProject.desktop.pubBody"
                         type="textarea"
+                        disabled
                         autocomplete="off"
                         autoCapitalize="off"
                         autoCorrect="off"
@@ -410,8 +439,11 @@
                     />
                 </el-form-item>
             </el-form>
-            <span style="color: #aaa">
-                {{ t('pubNotesTips') }}
+            <span class="pubNotesTips">
+                <span>{{ t('pubNotesTips') }}</span>
+                <el-icon @click="openUrl(urlMap.builddoc)" class="readIcon">
+                    <ReadingLamp />
+                </el-icon>
             </span>
             <template #footer>
                 <div class="dialog-footer">
@@ -465,7 +497,12 @@
                     </h4>
                 </div>
             </template>
-            <CodeEdit ref="codeEditRef" lang="javascript" />
+            <CodeEdit
+                ref="codeEditRef"
+                lang="javascript"
+                height="400px"
+                :code="store.currentProject.customJs"
+            />
         </el-dialog>
         <!-- img preview -->
         <ImgPreview
@@ -494,7 +531,12 @@ import {
     exists,
     remove,
 } from '@tauri-apps/plugin-fs'
-import { appCacheDir, appDataDir, join } from '@tauri-apps/api/path'
+import {
+    appCacheDir,
+    appDataDir,
+    downloadDir,
+    join,
+} from '@tauri-apps/api/path'
 import { basename } from '@tauri-apps/api/path'
 import {
     ArrowLeft,
@@ -508,6 +550,8 @@ import {
     Paperclip,
     Document,
     Cellphone,
+    FolderOpened,
+    ReadingLamp,
 } from '@element-plus/icons-vue'
 import CutterImg from '@/components/CutterImg.vue'
 import CodeEdit from '@/components/CodeEdit.vue'
@@ -699,6 +743,8 @@ const methodOptions = [
         disabled: true,
     },
 ]
+
+// platform map
 const platformMap: any = {
     macosaarch64: ['2-2'],
     macosx86_64: ['2-1'],
@@ -716,6 +762,29 @@ const methodChange = (value: string) => {
         store.currentProject.platform = platformMap[platformName + archName]
     } else {
         store.currentProject.platform = ['1-1', '1-2', '2-1', '2-2']
+    }
+}
+
+// save path
+const savePath = ref('')
+const savePathHandle = async (handle: string) => {
+    if (handle) {
+        if (savePath.value && handle === 'open') {
+            openUrl(savePath.value)
+        } else {
+            const selected: any = await openSelect(true, [])
+            console.log('selected', selected)
+            if (selected) {
+                savePath.value = selected
+            }
+        }
+    } else {
+        // check path
+        const isExists = await exists(savePath.value)
+        if (!isExists) {
+            oneMessage.error('路径不存在')
+            return
+        }
     }
 }
 
@@ -1561,13 +1630,13 @@ const updateTauriConfig = async () => {
 }
 
 // local publish
-const localPublish = async () => {
-    // select save path
-    // download zip
-    // unzip
-    // copy to dist
-    // update config
-    // publish web
+const easyLocal = async () => {
+    console.log('easyLocal')
+    // copy pp to save path
+    const exe_dir = await invoke('get_exe_dir')
+    console.log('exe_dir', exe_dir)
+    // update pp config
+    // publish local client
 }
 
 // new publish version
@@ -1620,7 +1689,7 @@ const publishWeb = async () => {
 // publish check
 const publishCheck = async () => {
     if (store.currentProject.desktop.buildMethod === 'local') {
-        localPublish()
+        await easyLocal()
     } else if (store.token === '') {
         oneMessage.error(t('configToken'))
         return
@@ -2144,6 +2213,21 @@ onMounted(async () => {
     align-items: center;
     font-size: 18px;
     font-weight: bold;
+    // margin-right: 4px;
+}
+
+.pubNotesTips {
+    color: #aaa;
+
+    .readIcon {
+        cursor: pointer;
+        margin-left: 2px;
+        vertical-align: middle;
+        margin-bottom: 2px;
+        &:hover {
+            color: var(--text-color);
+        }
+    }
 }
 </style>
 
